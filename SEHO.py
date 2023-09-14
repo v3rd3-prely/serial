@@ -35,6 +35,9 @@ error_logger = setup_logger('error_logger', 'logs\error_logfile.log')
 # logging.basicConfig(filename='usb_log.txt', level=logging.INFO, format='%(asctime)s - %(message)s')
 
 class MyApp(QWidget):
+    def __del__(self):
+        super().__del__()
+        self.ser.close()
 
     def __init__(self):
         super().__init__()
@@ -44,6 +47,21 @@ class MyApp(QWidget):
         self.defaults = json.load(f)
         self.initUI()
         self.load_excel_file()
+        try:
+            self.ser = serial.Serial()
+            self.ser.port=self.defaults['port']
+            self.ser.baudrate=9600
+            self.ser.parity=serial.PARITY_NONE
+            self.ser.stopbits=serial.STOPBITS_ONE
+            self.ser.bytesize=serial.EIGHTBITS
+            self.ser.timeout=100
+            self.ser.open()
+            # self.status_label.setText('Se cauta...')
+            time.sleep(2)
+            self.ser.write("\033i".encode())
+            time.sleep(1)
+        except:
+            QMessageBox.critical(self, "Error", "Can't find Serial")
 
     def focus_cod(self):
         self.input_field.setFocus()
@@ -174,50 +192,26 @@ class MyApp(QWidget):
 
         # Verify if device is found
 
-    def is_device_found(self, data):
-        output = 'Program\t\t\t:i'
-        data = data.split('\n')
-        return output == data[len(data)-1]
+    def isDeviceFound(self, dataFound):
+        output = "Aktuelle Parameter"
+        # print("finding token...")
+        return dataFound.find(output) != -1
 
-    # Verify if device is written correctly
-
-    def verify_write(self, data, program, station):
-        data = data.split('\n')
-
-        # Program
-        aux = 0
-        result = 1
-
-        info_logger.info('Verifing values:\t Program: '+str(program)+' Station: '+str(station))
-        try:
-            aux = int(data[len(data)-8].split(':')[1])
-            if(aux != program):
-                # print('program not written')
-                # error_logger.error('Did not write correctly program')
-                raise Exception()
-                result = 0
-        except:
-            # error_logger.error('Could not verify program')
-            raise Exception('Device was not written correctly.')
-
-            result = 0
-
-        # Station
-
-        try:
-            aux = int(data[len(data)-7].split(':')[1])
-            if(aux != station):
-                # print('Did not write correctly station')
-                # error_logger.error('Did not write correctly station')
-
-                raise Exception()
-                result = 0
-        except:
-            # error_logger.error('Could not verify station')
-            raise Exception('Device was not written correctly.')
-            result = 0
-
-        return result
+    def verifyWrite(self, dataVerify):
+        output = "Prog\t"
+        good = "OK"
+        bad = "ERROR"
+        loc = dataVerify.find(output)
+        loc2 = dataVerify[loc:].find('\n')
+        parsed = dataVerify[loc:loc+loc2]
+        # print("Verifing write...")
+        # print(parsed, end="@\n#######\n")
+        # print(data[loc:loc+loc2], end="#")
+        if(parsed.find(good) != -1):
+            return 1
+        if(parsed.find(bad) != -1):
+            return 0
+        return -1
 
     def read_buffer(self, serial):
         bufferSize = serial.in_waiting
@@ -225,68 +219,88 @@ class MyApp(QWidget):
 
     def write_device(self, program, statie):
 
-        # Setup
-
-        ser = serial.Serial()
-        ser.port=self.defaults['port']
-        ser.baudrate=9600
-        ser.parity=serial.PARITY_NONE
-        ser.stopbits=serial.STOPBITS_ONE
-        ser.bytesize=serial.EIGHTBITS
-        ser.timeout=100
-        ser.open()
         self.status_label.setText('Se cauta...')
-        time.sleep(2)
-        ser.write("\033i".encode())
-        time.sleep(1)
 
         # Searching for device
 
-        print('Searching..')
-        time.sleep(1)
-        data = self.read_buffer(ser)
-        index = 0
-        while not self.is_device_found(data) and index < 5:
-            time.sleep(1)
-            print('Searching..')
-            index = index+1
+        self.ser.write("\033i".encode())
+        self.read_buffer(self.ser)
+        data1 = ""
+        print(data1, end="@\n")
 
-            data = self.read_buffer(ser)
-        print('Found')
+        # data1 += self.read_buffer(self.ser)
+        tries = 0
+        while not self.isDeviceFound(data1) and tries < 10:
+            time.sleep(0.2)
+            print("search")
+            data1 += self.read_buffer(self.ser)
+            tries += 1
+            print(data1, end="@\n")
+            print("##############")
+        if(tries >= 30):
+            self.status_label.setText('Nu s-a gasit')
+            error_logger.error('Token not found\t Program: '+str(program)+' Station: '+str(statie))
+            return -1
         self.status_label.setText('Se scrie...')
 
-        # Programare RFID
+        # Programare token
 
         aux = str(program)
         aux = '\b'*len(aux)
 
-        time.sleep(2)
-        ser.write(aux.encode())
+        # time.sleep(2)
         time.sleep(0.2)
-        ser.write(str(program).encode())
+        self.ser.write(aux.encode())
         time.sleep(0.2)
-        ser.write('\r'.encode())
+        self.ser.write(str(program).encode())
+        time.sleep(0.2)
+        self.ser.write('\r'.encode())
 
         time.sleep(0.2)
-        ser.write(str(statie).encode())
+        self.ser.write(str(statie).encode())
         time.sleep(0.2)
-        ser.write('\r'.encode())
+        self.ser.write('\r'.encode())
 
         time.sleep(0.2)
-        ser.write('l\r'.encode())
+        self.ser.write('l'.encode())
         time.sleep(0.2)
-        ser.write('l\r'.encode())
+        self.ser.write('\r'.encode())
+        time.sleep(0.2)
+        self.ser.write('l'.encode())
+        time.sleep(0.2)
+        self.ser.write('\r'.encode())
+
+
+        # Verificare
 
         self.status_label.setText('Se verifica...')
-        time.sleep(3.6)
-        data = self.read_buffer(ser)
-        time.sleep(0.2)
-        self.verify_write(data, program, statie)
+        data2 = ""
+        output = -1
 
-        print('Program:'+str(program)+'\tStation: '+str(statie))
-        self.status_label.setText('Gata\n'+'Program:'+str(program)+'\tStatie: '+str(statie))
-        ser.close()
-        return 1
+        tries = 0
+        print(data2, end="@\n")
+        while output == -1 and tries < 50:
+            time.sleep(0.2)
+            print("verify........")
+            data2 += self.read_buffer(self.ser)
+            output = self.verifyWrite(data2)
+            tries += 1
+            print(data2, end="@\n\n")
+            print(output, end="%\n\n")
+            print("$$$$$$$$$$$$$$$$$")
+            # print(output)
+        if(output == 1):
+            self.status_label.setText('Gata\n'+'Program: '+str(program)+'\tStatie: '+str(statie))
+            return 1
+        if(output == 0):
+            self.status_label.setText('Nu s-a scris corect')
+            error_logger.error('Token not written correctly\t Program: '+str(program)+' Station: '+str(statie))
+            return 0
+
+        self.status_label.setText('Nu s-a putut verifica\nVerificati conexiunea cu aparatul')
+        error_logger.error('Check Connection - Token not verified\t Program: '+str(program)+' Station: '+str(statie))
+        return -1
+
 
     def thread(self):
         self.write_lock.acquire()
@@ -296,39 +310,72 @@ class MyApp(QWidget):
         self.read_lock.acquire()
         start_new_thread(self.readDevice, ())
 
-    def readDevice(self):
-        info_logger.info('Citire USB')
+    def readData(self, data):
+        prog = "Program"
+        stat = "Station"
+        # print(data.find(prog))
+        loc = data.find(prog)
+        loc2 = data[loc:].find('\n')
+        program = data[loc:loc+loc2]
+        # print(program, end="@\n#######\n")
+
+        loc = data.find(stat)
+        loc2 = data[loc:].find('\n')
+        station = data[loc:loc+loc2]
+        # print(station, end="@\n#######\n")
+
+
         try:
-            ser = serial.Serial()
-            ser.port=self.defaults['port']
-            ser.baudrate=9600
-            ser.parity=serial.PARITY_NONE
-            ser.stopbits=serial.STOPBITS_ONE
-            ser.bytesize=serial.EIGHTBITS
-            ser.timeout=100
-            ser.open()
-            self.status_label.setText('Se cauta...')
-            time.sleep(2)
-            ser.write("\033i".encode())
-            time.sleep(1)
+            program = int(program.split(':')[1])
+            station = int(station.split(':')[1])
+        except:
+            return -1
+        print(data)
+        print('Program: '+str(program)+'\tStatie: '+str(station))
+        return 'Program: '+str(program)+'\tStatie: '+str(station)
 
-            self.status_label.setText('Se verifica...')
-            time.sleep(3.6)
-            data = self.read_buffer(ser)
-            time.sleep(0.2)
-            program = int(data[len(data)-8].split(':')[1])
-            # self.verify_write(data, program, statie)
-            statie = int(data[len(data)-7].split(':')[1])
 
-            print('Program:'+str(program)+'\tStation: '+str(statie))
-            self.status_label.setText('Program:'+str(program)+'\tStatie: '+str(statie))
-            ser.close()
+    def readDevice(self):
+        info_logger.info('Citire token')
+        try:
+
+            self.status_label.setText('Se citeste...')
+
+            self.ser.write("\033i".encode())
+            self.read_buffer(self.ser)
+            data3 = ""
+            tries = 0
+            readOutput = -1
+            print(data3, end="@\n")
+
+            # data3 += self.read_buffer(self.ser)
+            # output = self.readData(data3)
+            while readOutput == -1 and tries < 10:
+                time.sleep(0.2)
+                print("reading...")
+                tries += 1
+                data3 += self.read_buffer(self.ser)
+                print(data3, end="@\n")
+                print("##############")
+
+
+                readOutput = self.readData(data3)
+                # print(output)
+                # print("##############")
+            if(readOutput == -1):
+                self.status_label.setText('Nu s-a putut citi')
+                error_logger.error("Can't find token")
+                self.read_lock.release()
+                return 0
+            self.status_label.setText(readOutput)
+            info_logger.info(readOutput)
             self.read_lock.release()
+            return 1
 
         except Exception as e:
             error_message = f"Error occurred reading USB: {str(e)}"
             error_logger.error(error_message)
-            self.status_label.setText("Nu s-a putut citi")
+            self.status_label.setText("Nu s-a putut citi.")
             self.read_lock.release()
 
 
